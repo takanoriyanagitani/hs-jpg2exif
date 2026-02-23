@@ -1,0 +1,65 @@
+FROM alpine:3.23.2 AS builder
+RUN apk update
+RUN apk add curl
+
+RUN curl \
+    --location \
+    --fail \
+    --show-error \
+    --remote-name \
+    https://gitlab.haskell.org/haskell-wasm/ghc-wasm-meta/-/raw/master/bootstrap.sh
+
+RUN apk add bash
+RUN apk add jq
+RUN apk add zstd
+RUN apk add make
+
+RUN sh -c '. bootstrap.sh'
+
+RUN ln -s /root/.ghc-wasm/wasm32-wasi-ghc/bin/wasm32-wasi-ghc /usr/local/bin/
+RUN ln -s /root/.ghc-wasm/cabal/bin/cabal /usr/local/bin/
+
+RUN which wasm32-wasi-ghc
+RUN which cabal
+
+RUN wasm32-wasi-ghc --version
+RUN cabal --version
+
+RUN cabal update --verbose=2
+
+RUN ln -s /root/.ghc-wasm/wasm32-wasi-ghc/bin/wasm32-wasi-ghc /usr/local/bin/ghc
+RUN ln -s /root/.ghc-wasm/wasm32-wasi-ghc/bin/wasm32-wasi-ghc-pkg /usr/local/bin/
+RUN ln -s /root/.ghc-wasm/wasm32-wasi-ghc/bin/wasm32-wasi-ghc-pkg /usr/local/bin/ghc-pkg
+
+WORKDIR /hs-jpg2exif
+COPY --link ./hs-jpg2exif.cabal ./
+RUN cabal update --verbose
+RUN apk add ghc
+RUN which hsc2hs
+RUN cabal \
+    build \
+    --only-dependencies \
+    --allow-newer
+COPY --link ./src/ ./src/
+COPY --link ./app/ ./app/
+COPY --link ./LICENSE ./
+RUN cabal \
+    build \
+    --allow-newer
+RUN cabal \
+    list-bin \
+    hs-jpg2exif \
+    | fgrep -m 1 hs-jpg2exif.wasm \
+    | while read line; do \
+        test -f "${line}" && cp -i "${line}" /usr/local/share/; \
+    done
+RUN test -f /usr/local/share/hs-jpg2exif.wasm || \
+    find . -type f -name '*.wasm' | head -1 | while read line; do \
+        cp -i "${line}" /usr/local/share; \
+    done
+RUN ls -lh /usr/local/share/hs-jpg2exif.wasm
+
+FROM scratch
+COPY --from=builder /usr/local/share/hs-jpg2exif.wasm /
+
+CMD ["/hs-jpg2exif.wasm"]
